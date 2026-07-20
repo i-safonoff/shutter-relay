@@ -1,0 +1,16 @@
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "relay.settings"
+python_files = ["test_*.py"]
+addopts = "-q"
+asyncio_mode = "auto"
+markers = [
+    "live: needs the full docker-compose stack running (make up)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["**/migrations/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
