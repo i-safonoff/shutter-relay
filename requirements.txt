@@ -1,0 +1,8 @@
+Django==6.1.1
+channels==4.3.2
+channels_redis==4.3.0
+daphne==4.2.3
+boto3==1.43.92
+pillow==12.3.0
+psycopg[binary]==3.3.5
+python-dotenv==1.2.3
