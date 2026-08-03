@@ -59,6 +59,43 @@ services:
       minio:
         condition: service_healthy
 
+  app:
+    build: .
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      # The one setting that has to differ from S3_ENDPOINT_URL: this is
+      # the host a *browser* uses to reach MinIO, not the one the app
+      # container uses. Presigned URLs are signed for a specific host --
+      # see storage.py for why signing against the wrong one 403s rather
+      # than just working with a swapped Host header.
+      S3_PUBLIC_ENDPOINT_URL: http://localhost:9100
+      IMGPROXY_BASE_URL: http://localhost:9101
+      IMGPROXY_KEY: ${IMGPROXY_KEY}
+      IMGPROXY_SALT: ${IMGPROXY_SALT}
+      DJANGO_DEBUG: "1"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  edge:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./ops/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8020:80"
+    depends_on:
+      app:
+        condition: service_healthy
+
 volumes:
   relay-pg-data:
   relay-minio-data:
