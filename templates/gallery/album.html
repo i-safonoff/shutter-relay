@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ album.name }} — shutter-relay</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  #grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+  #status { color: #666; font-size: 0.9rem; }
+  form { margin: 1rem 0; }
+</style>
+</head>
+<body>
+<h1>{{ album.name }}</h1>
+<p id="status">connecting…</p>
+<form id="upload-form">
+  <input type="file" id="file-input" accept="image/*" required>
+  <button type="submit">Upload</button>
+</form>
+<div id="grid"></div>
+
+<script>
+// No framework, no build step -- one album, one socket, one upload flow.
+// The point of this page is the sequence below, not the UI around it.
+const slug = "{{ album.slug }}";
+const grid = document.getElementById("grid");
+const status = document.getElementById("status");
+
+function addPhoto(photo, prepend) {
+  const img = document.createElement("img");
+  img.src = photo.urls.thumb;
+  img.title = photo.uploader || "anonymous";
+  if (prepend) grid.prepend(img); else grid.appendChild(img);
+}
+
+fetch(`/albums/${slug}/photos/`)
+  .then(r => r.json())
+  .then(data => data.photos.forEach(p => addPhoto(p, false)));
+
+// wss:// when the page itself is https:// -- a mixed-content socket is
+// blocked by the browser before it ever reaches the network.
+const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+const ws = new WebSocket(`${wsProtocol}//${location.host}/ws/albums/${slug}/`);
+ws.onopen = () => { status.textContent = "live"; };
+ws.onclose = () => { status.textContent = "disconnected — reload to reconnect"; };
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === "photo_added") addPhoto(msg.photo, true);
+};
+
+document.getElementById("upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = document.getElementById("file-input").files[0];
+  if (!file) return;
+
+  // Three requests, three different recipients: Django decides a key and
+  // signs a URL, the browser PUTs bytes straight to S3 without Django
+  // ever touching them, then Django is told to check and broadcast.
+  const req = await fetch(`/albums/${slug}/uploads/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content_type: file.type || "application/octet-stream" }),
+  });
+  const { photo_id, upload_url } = await req.json();
+
+  await fetch(upload_url, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
+
+  const confirmReq = await fetch(`/photos/${photo_id}/confirm/`, { method: "POST" });
+  if (!confirmReq.ok) {
+    // 409: the object genuinely never landed in S3 -- see
+    // docs/DECISIONS.md for why this is checked server-side rather than
+    // trusted from the client's own "the PUT succeeded" claim.
+    alert("upload did not confirm — try again");
+    return;
+  }
+  // No addPhoto() call here: the confirming tab gets its own photo the
+  // same way every other open tab does, over the socket it already
+  // holds, once the server has actually verified it.
+  document.getElementById("upload-form").reset();
+});
+</script>
+</body>
+</html>
