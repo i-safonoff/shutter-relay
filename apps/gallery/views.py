@@ -6,6 +6,7 @@ and the only place a WebSocket group ever gets a message.
 from __future__ import annotations
 
 import json
+import logging
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -18,6 +19,8 @@ from django.views.decorators.http import require_GET, require_POST
 
 from . import imgproxy, storage
 from .models import Album, Photo
+
+logger = logging.getLogger(__name__)
 
 
 def _photo_payload(photo: Photo) -> dict:
@@ -91,9 +94,30 @@ def confirm_upload(request, photo_id: str):
     photo.save(update_fields=["status", "confirmed_at"])
     payload = _photo_payload(photo)
 
+    # Found by actually killing Redis mid-request: channels_redis raises
+    # a bare ConnectionError out of group_send with no retry and no
+    # fallback, which -- uncaught -- turned into a 500 on a request whose
+    # actual write had already succeeded and was already durable in
+    # Postgres. That is a worse failure than a missed live update: it
+    # tells the uploader their photo confirmation *failed* when it did
+    # not, and there is no code path left that would ever show them
+    # otherwise. Unlike websocket-presence-board's Redis bridge -- built
+    # to keep serving a room's already-connected members when its Redis
+    # link drops -- Channels' RedisChannelLayer does not degrade on its
+    # own; a caller that wants that has to catch it explicitly, which is
+    # what this is. The broadcast is best-effort by design (see
+    # docs/DECISIONS.md): a viewer connected right now may miss it, but
+    # will see the photo on their next GET /albums/<slug>/photos/ or page
+    # load regardless, because the row landed before this line ever ran.
     channel_layer = get_channel_layer()
-    async_to_sync(channel_layer.group_send)(
-        f"album_{photo.album.slug}",
-        {"type": "photo_added", "photo": payload},
-    )
+    try:
+        async_to_sync(channel_layer.group_send)(
+            f"album_{photo.album.slug}",
+            {"type": "photo_added", "photo": payload},
+        )
+    except Exception:
+        logger.exception(
+            "live broadcast failed for photo %s; the confirm itself still succeeded", photo.id
+        )
+
     return JsonResponse(payload)
