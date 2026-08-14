@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: relay
+          POSTGRES_USER: relay
+          POSTGRES_PASSWORD: relay
+        ports: ["5544:5432"]
+        options: >-
+          --health-cmd "pg_isready -U relay"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5544"
+      # channels_redis is only imported, never connected to, by anything
+      # `pytest -m "not live"` runs -- no Redis service needed for this job.
+      REDIS_URL: redis://localhost:6399/0
+      IMGPROXY_KEY: "00"
+      IMGPROXY_SALT: "00"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: pytest -m "not live"
+
+  # The full stack: Postgres, Redis, MinIO, imgproxy, and the app itself
+  # built from the same Dockerfile a real deploy would use -- not a
+  # lighter substitute for CI, because the two real bugs in
+  # docs/DECISIONS.md (MinIO's CORS API, the presigned-URL host mismatch)
+  # are both properties of these exact services interacting, invisible to
+  # anything that mocks one of them out.
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - run: pip install -r requirements-dev.txt
+      - name: Write .env
+        run: |
+          echo "IMGPROXY_KEY=$(openssl rand -hex 32)" >> .env
+          echo "IMGPROXY_SALT=$(openssl rand -hex 32)" >> .env
+      - run: docker compose up -d --build
+      - name: Wait for the app to be healthy
+        run: |
+          for _ in $(seq 1 40); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' shutter-relay-app-1 2>/dev/null || echo starting)
+            [ "$status" = "healthy" ] && exit 0
+            sleep 2
+          done
+          docker compose logs; exit 1
+      - run: >
+          POSTGRES_HOST=localhost POSTGRES_PORT=5544
+          REDIS_URL=redis://localhost:6389/0
+          S3_ENDPOINT_URL=http://localhost:9100
+          S3_PUBLIC_ENDPOINT_URL=http://localhost:9100
+          IMGPROXY_BASE_URL=http://localhost:9101
+          pytest -m live
+      - if: always()
+        run: docker compose down -v
