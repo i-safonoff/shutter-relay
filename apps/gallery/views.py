@@ -10,6 +10,7 @@ import logging
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.utils import timezone
@@ -86,8 +87,24 @@ def confirm_upload(request, photo_id: str):
     # ever having PUT the file -- or whose PUT failed partway -- gets a
     # 409 here instead of every viewer's WebSocket getting a photo that
     # 404s when they try to load it.
-    if not storage.object_exists(photo.s3_key()):
+    size = storage.object_size(photo.s3_key())
+    if size is None:
         return JsonResponse({"error": "object not found in storage"}, status=409)
+
+    # object_size() reads what S3 actually recorded, not whatever
+    # Content-Length the client's PUT happened to send -- the same
+    # "don't trust the client's own account of what it did" rule the
+    # None-means-never-uploaded check above already applied to whether
+    # the upload happened at all, applied here to how big it was. A
+    # rejected upload's bytes are
+    # deleted immediately rather than left to rot in the bucket as an
+    # object no Photo row will ever point back to.
+    if size > settings.MAX_PHOTO_BYTES:
+        storage.delete_object(photo.s3_key())
+        return JsonResponse(
+            {"error": f"file too large: {size} bytes, limit is {settings.MAX_PHOTO_BYTES}"},
+            status=413,
+        )
 
     photo.status = Photo.Status.CONFIRMED
     photo.confirmed_at = timezone.now()

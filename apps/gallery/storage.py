@@ -1,7 +1,8 @@
-"""Talks to S3 (MinIO locally) for exactly two things: a presigned PUT the
-browser uses directly, and a HEAD check the server uses to confirm the
-browser actually used it. Django's own request/response cycle never sees
-a photo's bytes.
+"""Talks to S3 (MinIO locally): a presigned PUT the browser uses directly,
+a HEAD check the server uses to confirm the browser actually used it and
+to read the size S3 actually recorded, and a DELETE for the one case
+that check exists to catch. Django's own request/response cycle never
+sees a photo's bytes.
 """
 
 from __future__ import annotations
@@ -57,14 +58,24 @@ def presigned_put_url(key: str, content_type: str, *, expires_in: int = 300) -> 
     )
 
 
-def object_exists(key: str) -> bool:
+def object_size(key: str) -> int | None:
+    """None if the object was never uploaded. A size, in bytes, straight
+    from S3's own record of what actually landed -- not from whatever
+    Content-Length header the client's PUT happened to send, which is
+    exactly the number a client controls and this function is not
+    interested in trusting.
+    """
     try:
-        _internal_client().head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key)
-        return True
+        response = _internal_client().head_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key)
+        return response["ContentLength"]
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey"):
-            return False
+            return None
         raise
+
+
+def delete_object(key: str) -> None:
+    _internal_client().delete_object(Bucket=settings.AWS_STORAGE_BUCKET_NAME, Key=key)
 
 
 def ensure_bucket() -> None:

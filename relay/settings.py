@@ -108,6 +108,12 @@ AWS_S3_ENDPOINT_URL = os.environ.get("S3_ENDPOINT_URL", "http://localhost:9100")
 # one, because the signer and the URL's audience are not the same machine.
 AWS_S3_PUBLIC_ENDPOINT_URL = os.environ.get("S3_PUBLIC_ENDPOINT_URL", "http://localhost:9100")
 
+# Checked at confirm time against the size S3 actually recorded, not
+# against anything a client's PUT claimed in a Content-Length header --
+# see views.confirm_upload. 10MB: generous for a phone photo, small
+# enough that a rejected upload's own S3 DELETE is cheap.
+MAX_PHOTO_BYTES = int(os.environ.get("MAX_PHOTO_BYTES", 10 * 1024 * 1024))
+
 # imgproxy: HMAC key + salt, hex-encoded, must match imgproxy's own
 # IMGPROXY_KEY / IMGPROXY_SALT exactly or every signed URL 403s.
 IMGPROXY_BASE_URL = os.environ.get("IMGPROXY_BASE_URL", "http://localhost:9101")
