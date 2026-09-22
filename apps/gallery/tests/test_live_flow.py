@@ -10,8 +10,10 @@ import httpx
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.conf import settings
 from django.test import Client
 
+from apps.gallery import storage
 from apps.gallery.models import Album, Photo
 from relay.asgi import application
 
@@ -94,6 +96,33 @@ async def test_a_second_album_never_hears_the_first_albums_broadcast(album):
 
     await mine.disconnect()
     await theirs.disconnect()
+
+
+@pytest.mark.django_db
+def test_an_oversized_upload_is_rejected_and_its_bytes_do_not_survive(album):
+    resp = Client().post(
+        f"/albums/{album.slug}/uploads/",
+        data='{"content_type": "application/octet-stream"}',
+        content_type="application/json",
+    )
+    body = resp.json()
+
+    oversized = b"\0" * (settings.MAX_PHOTO_BYTES + 1)
+    put = httpx.put(
+        body["upload_url"], content=oversized, headers={"Content-Type": "application/octet-stream"}
+    )
+    # MinIO accepts it -- the limit is enforced at confirm, not upload.
+    assert put.status_code == 200
+
+    photo_id = body["photo_id"]
+    confirm = Client().post(f"/photos/{photo_id}/confirm/")
+    assert confirm.status_code == 413
+
+    photo = Photo.objects.get(id=photo_id)
+    assert photo.status == Photo.Status.PENDING
+    # The real point of this test: not just rejected, but not left behind
+    # in the bucket as an object no confirmed Photo will ever reference.
+    assert storage.object_size(photo.s3_key()) is None
 
 
 @pytest.mark.django_db
