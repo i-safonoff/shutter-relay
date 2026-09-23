@@ -109,3 +109,24 @@ one -- a real cost in a small codebase, worth it because the failure
 mode of getting it wrong (`SignatureDoesNotMatch` on every single
 upload) is opaque enough that it's worth never encountering by
 construction rather than debugging later.
+
+## 6. File size is enforced at confirm time, against what S3 recorded
+
+**Context.** A presigned PUT URL has no size limit of its own -- nothing
+stops a client from uploading a 2GB file to a bucket meant for phone
+photos, and `Content-Length` on the PUT request is exactly the kind of
+number a client controls, which is disqualifying for the same reason a
+client's "the PUT succeeded" claim already was (decision 2).
+
+**Decision.** `confirm_upload` reads `ContentLength` off S3's own
+`head_object` response -- what actually landed, not what was claimed on
+the way in -- and rejects anything over `MAX_PHOTO_BYTES` with a 413.
+The object's bytes are deleted immediately rather than left in the
+bucket as storage no confirmed `Photo` row will ever reference.
+
+**Cost.** The check runs after the full file has already been
+transferred to S3, not before -- a presigned URL can't carry a size
+condition the way a presigned POST policy can, so an attacker uploading
+many oversized files still costs real bandwidth and storage churn before
+each one is rejected and cleaned up. Rate-limiting `request_upload`
+itself would be the next layer, and isn't built here.
