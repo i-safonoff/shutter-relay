@@ -236,10 +236,16 @@ Honest limitations, not a roadmap:
   automatically. A per-connection catch-up mechanism is closer to that
   other project's `feat/resume-after-reconnect` than to anything this
   project's scope justified building twice.
-- **No content validation before storage.** Uploads go straight to S3;
-  nothing scans, re-encodes, or checks dimensions before a photo exists
-  in the bucket. A real deployment needs a second-stage worker for that,
-  not more logic in the request path.
+- **File size is enforced; content is not.** `confirm_upload` rejects
+  and deletes anything over `MAX_PHOTO_BYTES`, checked against what S3
+  actually recorded rather than what the client's PUT claimed
+  (`docs/DECISIONS.md`, decision 6) -- but nothing scans, re-encodes, or
+  even confirms the bytes are a decodable image before a photo exists in
+  the bucket. A real deployment needs a second-stage worker for that,
+  not more logic in the request path. The size check also can't stop an
+  oversized upload from actually transferring first -- a presigned PUT
+  URL carries no size condition the way a presigned POST policy could,
+  so rejection is still bandwidth spent, not bandwidth prevented.
 - **One Daphne instance.** Multiple instances behind nginx, with the
   cross-instance fan-out story that requires, is exactly what
   `websocket-presence-board` already built and measured; repeating it
