@@ -68,10 +68,12 @@ document.getElementById("upload-form").addEventListener("submit", async (e) => {
 
   const confirmReq = await fetch(`/photos/${photo_id}/confirm/`, { method: "POST" });
   if (!confirmReq.ok) {
-    // 409: the object genuinely never landed in S3 -- see
-    // docs/DECISIONS.md for why this is checked server-side rather than
-    // trusted from the client's own "the PUT succeeded" claim.
-    alert("upload did not confirm — try again");
+    // 409: the object genuinely never landed in S3. 413: it landed, and
+    // was already deleted server-side for being over the limit -- see
+    // docs/DECISIONS.md for why both are checked here rather than
+    // trusted from the client's own account of what its PUT did.
+    const { error } = await confirmReq.json().catch(() => ({ error: null }));
+    alert(error || "upload did not confirm — try again");
     return;
   }
   // No addPhoto() call here: the confirming tab gets its own photo the
